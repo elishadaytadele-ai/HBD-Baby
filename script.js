@@ -1,546 +1,237 @@
-const BOOKINGS_KEY = 'wa_bookings';
+// Guided cinematic birthday experience
+(() => {
+	const pages = Array.from(document.querySelectorAll('.page'));
+	const backBtn = document.getElementById('backBtn');
+	const openGift = document.getElementById('openGift');
+	const bgMusic = document.getElementById('bgMusic');
+	let current = 0;
+	let engaged = false;
 
-function loadLocalBookings(){
-  try{ return JSON.parse(localStorage.getItem(BOOKINGS_KEY) || '[]'); }catch(e){ return []; }
-}
+	function hideAllHearts(){
+		document.querySelectorAll('.heart-btn').forEach(b=>b.classList.remove('show','pulse'));
+	}
 
-function saveLocalBooking(b){
-  const arr = loadLocalBookings();
-  arr.unshift(b);
-  localStorage.setItem(BOOKINGS_KEY, JSON.stringify(arr));
-}
+	function showHeartForPage(index){
+		// deterministic: always hide all first, then explicitly enable the one allowed for this index
+		hideAllHearts();
+		const page = pages[index];
+		if(!page) return;
+		const btn = page.querySelector('.heart-btn');
+		if(!btn) return;
+		switch(index){
+			case 0: // locked gift: always visible
+				btn.classList.add('show');
+				break;
+			case 1: // photo cards: shown only after user interacts (card click)
+				btn.classList.add('show');
+				break;
+			case 2: // video message: shown only after video 'ended'
+				btn.classList.add('show');
+				break;
+			case 3: // future: visible immediately
+				btn.classList.add('show');
+				break;
+			case 4: // letter typing: shown after typing finishes
+				btn.classList.add('show');
+				break;
+			case 5: // final: never visible
+				break;
+			default:
+				break;
+		}
+	}
 
-function renderLocalHistory(){
-  const list = document.getElementById('historyList');
-  if(!list) return;
-  const items = loadLocalBookings();
-  list.innerHTML = '';
-  if(items.length===0){ list.appendChild(Object.assign(document.createElement('li'),{textContent:'No previous bookings yet.'})); return; }
-  items.forEach(d=>{
-    const li = document.createElement('li');
-    const when = d.TimeStamp ? new Date(d.TimeStamp).toLocaleString() : '';
-    li.textContent = `${d.serviceType || 'Wait in line'} — ${d.Minutes||0}m — ${d.customerName||''} ${when? '— '+when : ''}`;
-    list.appendChild(li);
-  });
-}
-// Simple frontend prototype logic for booking, matching, live tracking, and rating
-const RATE_PER_MIN = 2;
-// Defensive placeholders for inline handlers (avoid "undefined" during early clicks)
-if(!window.showScreen) window.showScreen = (...args)=>{ console.warn('showScreen called before init', ...args); };
-if(!window.endBooking) window.endBooking = (...args)=>{ console.warn('endBooking called before init', ...args); };
-if(!window.setRating) window.setRating = (...args)=>{ console.warn('setRating called before init', ...args); };
-if(!window.submitRating) window.submitRating = (...args)=>{ console.warn('submitRating called before init', ...args); };
-if(!window.saveProfile) window.saveProfile = (...args)=>{ console.warn('saveProfile called before init', ...args); };
-let liveTimerId = null;
-let liveSeconds = 0;
-let currentBooking = null;
-let selectedPaymentMethod = null;
-let currentBookingId = null;
+	function showPage(index){
+		// blur any focused element before hiding pages to avoid focus leakage
+		try{ if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); }catch(e){}
 
-function showScreen(id){
-  const duration = 60; // match CSS transition (ms)
-  const current = document.querySelector('.screen.active');
-  const target = document.getElementById(id);
-  if(current && current.id === id) return;
-  // animate current out
-  if(current){
-    current.classList.remove('fade-in');
-    current.classList.add('fade-out');
-    // keep it active during the fade, then remove
-    setTimeout(()=>{
-      current.classList.remove('active','fade-out');
-    }, duration);
-  }
-  // animate target in
-  if(target){
-    // ensure any previous state cleared
-    target.classList.remove('fade-out');
-    target.classList.add('active','fade-in');
-    // cleanup fade-in after animation
-    setTimeout(()=>{ target.classList.remove('fade-in'); }, duration);
-    // reset scroll
-    try{ window.scrollTo(0,0); }catch(e){}
-  }
-}
-function showPaymentOptions(){
-  const paymentDiv = document.getElementById('paymentOptions');
-  if(!paymentDiv) return;
-  const active = document.querySelector('.screen.active');
-  // If we're not on the dashboard, navigate there first so the panel is visible
-  if(active && active.id !== 'dashboard'){
-    showScreen('dashboard');
-    // allow the screen transition to complete so the element becomes visible
-    setTimeout(()=>{ paymentDiv.style.display = 'block'; }, 120);
+		pages.forEach((p,i)=>{
+  const visible = i===index;
+
+  if(visible){
+    p.removeAttribute('inert');
+    p.setAttribute('aria-hidden','false');
   } else {
-    paymentDiv.style.display = 'block';
+    p.setAttribute('aria-hidden','true');
+    p.setAttribute('inert','');
   }
-}
-
-function selectPayment(method){
-  selectedPaymentMethod = method;
-
-  document.getElementById('paymentOptions').style.display = 'none';
-  document.getElementById('proofSection').style.display = 'block';
-}
-
-// Booking form interactions
-const inputMinutes = () => document.getElementById('inputMinutes');
-const inputPurchase = () => document.getElementById('inputPurchase');
-function updateEstimate(){
-  const mins = Number(inputMinutes().value||0);
-  const purchase = Number(inputPurchase().value||0);
-  const est = (mins * RATE_PER_MIN) + purchase;
-  document.getElementById('estimatedCost').textContent = `${est.toFixed(2)}ETB`;
-  document.getElementById('ratePerMin').textContent = `${RATE_PER_MIN.toFixed(2)}ETB`;
-}
-  document.addEventListener('DOMContentLoaded', () => {restoreLiveState();
-  document.getElementById('inputMinutes')?.addEventListener('input',updateEstimate);
-  document.getElementById('inputPurchase')?.addEventListener('input',updateEstimate);
-  document.getElementById('confirmPrepayBtn')?.addEventListener('click',confirmPrepay);
-  document.getElementById('proofInput')?.addEventListener('change',handleProof);
-  // theme init
-  initTheme();
-  document.getElementById('themeToggle')?.addEventListener('click',toggleTheme);
-  // menu init
-  document.getElementById('menuToggle')?.addEventListener('click',()=>toggleMenu());
-  const __backdropInit = document.getElementById('menuBackdrop');
-  if(__backdropInit) __backdropInit.style.display = 'none';
-  document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') toggleMenu(false); });
-  // delegated handler for mobile menu items: use data-target attributes
-  const __mobileMenu = document.getElementById('mobileMenu');
-  if(__mobileMenu && !__mobileMenu._menuBound){
-    __mobileMenu.addEventListener('click', (ev)=>{
-      const btn = ev.target.closest('.mobile-item');
-      if(!btn) return;
-      const target = btn.dataset && btn.dataset.target;
-      if(target) showScreen(target);
-      // ensure menu closes after navigation
-      toggleMenu(false);
-    });
-    __mobileMenu._menuBound = true;
-  }
-  // ensure menu theme button mirrors main theme
-  // (menuThemeToggle removed from menu; top theme toggle remains)
-  // render local history (if any)
-  renderLocalHistory();
-  // update profile UI (avatar initials, booking count, recent bookings)
-  if(typeof refreshProfileUI === 'function') refreshProfileUI();
 });
-function restoreLiveState() {
-  const saved = localStorage.getItem('wa_live_state');
-  if (!saved) return;
 
-  try {
-    const { booking, liveSeconds: savedSeconds, isLive } = JSON.parse(saved);
-    if (!isLive || !booking) return;
+		current = index;
+		// back button hidden on page 1
+		backBtn.style.display = index===0 ? 'none' : 'block';
+		// deterministic heart control
+		showHeartForPage(index);
 
-    currentBooking = booking;
-    liveSeconds = savedSeconds;
+		// set focus to the active page or its visible heart button
+		const active = pages[index];
+		if(active){
+			const heart = active.querySelector('.heart-btn.show');
+			if(heart){ try{ heart.focus({preventScroll:true}); }catch(e){ heart.focus(); } }
+			else { active.setAttribute('tabindex','-1'); try{ active.focus({preventScroll:true}); }catch(e){ active.focus(); } }
+		}
+	}
 
-    startLive(currentBooking);
-  } catch (e) {
-    console.error('Failed to restore live state', e);
-  }
-}
+	function nextPage(){
+		if(current < pages.length -1){
+			showPage(current+1);
+		}
+	}
+	function prevPage(){
+		if(current > 0){
+			showPage(current-1);
+		}
+	}
 
-// THEME: light/dark toggle with persistence
-function applyTheme(theme){
-  if(theme==='dark') document.documentElement.setAttribute('data-theme','dark');
-  else document.documentElement.removeAttribute('data-theme');
-  const btn = document.getElementById('themeToggle');
-  if(btn){
-    btn.textContent = theme==='dark' ? '☀️' : '🌙';
-    btn.setAttribute('aria-pressed', theme==='dark' ? 'true' : 'false');
-    btn.setAttribute('aria-label', theme==='dark' ? 'Switch to light theme' : 'Switch to dark theme');
-  }
-  // keep menu button label in sync
-  syncMenuThemeButton();
-}
+	// Page 1 open gift
+	openGift.addEventListener('click', async (e)=>{
+		e.stopPropagation();
+		e.preventDefault();
+		if(!engaged){
+			engaged = true;
+			try{ await bgMusic.play(); }catch(e){}
+			openGift.classList.add('scale');
+			openGift.style.transform = 'scale(1.03)';
+			setTimeout(()=>{
+				openGift.style.transform = '';
+				showPage(1);
+			},600);
+		}
+	});
 
-function syncMenuThemeButton(){
-  const menuBtn = document.getElementById('menuThemeToggle');
-  if(!menuBtn) return;
-  const active = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-  menuBtn.textContent = active === 'dark' ? 'Switch to light' : 'Switch to dark';
-}
+	// Global back
+	backBtn.addEventListener('click', ()=>{
+		prevPage();
+	});
 
-function initTheme(){
-  const saved = localStorage.getItem('wa_theme');
-  if(saved){ applyTheme(saved); return; }
-  // fallback to OS preference
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  applyTheme(prefersDark ? 'dark' : 'light');
-}
+	// Photo cards interactions (page 2)
+	const cardsWrap = document.getElementById('cards');
+	if(cardsWrap){
+		cardsWrap.addEventListener('click', (e)=>{
+			const card = e.target.closest('.card');
+			if(!card) return;
+			card.classList.toggle('flipped');
+			// user interaction -> enable heart for page index 1
+			const pageIndex = 1; if(pages[pageIndex]) showHeartForPage(pageIndex);
+		});
+		// hover flip for desktop
+		cardsWrap.querySelectorAll('.card').forEach(c=>{
+			c.addEventListener('mouseenter', ()=>{ if(window.matchMedia('(hover: hover)').matches) c.classList.add('flipped'); });
+			c.addEventListener('mouseleave', ()=>{ if(window.matchMedia('(hover: hover)').matches) c.classList.remove('flipped'); });
+		});
+		cardsWrap.addEventListener('wheel', (e)=>{
+			if(Math.abs(e.deltaX) < Math.abs(e.deltaY)){
+				e.preventDefault();
+				cardsWrap.scrollBy({left:e.deltaY, behavior:'smooth'});
+			}
+		});
+	}
 
-function toggleTheme(){
-  const active = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-  const next = active === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  localStorage.setItem('wa_theme', next);
-}
+	// Page 3 video: show heart after ends
+	const page3Video = document.getElementById('page3Video');
+	if(page3Video){
+		// try autoplay but muted
+		page3Video.addEventListener('loadeddata', ()=>{
+			try{ page3Video.play(); }catch(e){}
+		});
+		page3Video.addEventListener('ended', ()=>{
+			// deterministic: show heart for page index 2 when video fully ended
+			showHeartForPage(2);
+		});
+	}
 
-// MENU: open/close mobile menu
-function toggleMenu(open){
-  const isOpen = document.documentElement.getAttribute('data-menu') === 'open';
-  const next = typeof open === 'boolean' ? open : !isOpen;
-  const menu = document.getElementById('mobileMenu');
-  const toggle = document.getElementById('menuToggle');
-  const backdrop = document.getElementById('menuBackdrop');
-  if(next){
-    document.documentElement.setAttribute('data-menu','open');
-    if(toggle) toggle.setAttribute('aria-expanded','true');
-    if(menu) menu.setAttribute('aria-hidden','false');
-    if(backdrop) backdrop.style.display='block';
-    // move focus into the menu for keyboard users (focus first item)
-    try{
-      const first = menu?.querySelector('.mobile-item');
-      if(first) first.focus();
-    }catch(e){}
-  } else {
-    // If a descendant currently has focus, move focus back to the toggle
-    try{
-      if(menu && menu.contains(document.activeElement)){
-        if(toggle) toggle.focus();
-        else document.body.focus();
-      }
-    }catch(e){}
-    document.documentElement.removeAttribute('data-menu');
-    if(toggle) toggle.setAttribute('aria-expanded','false');
-    if(menu) menu.setAttribute('aria-hidden','true');
-    if(backdrop) backdrop.style.display='none';
-  }
-}
+	// Page 4 video: pause bg music, show heart on end or 75%
+	const page4Video = document.getElementById('page4Video');
+	if(page4Video){
+		page4Video.addEventListener('play', ()=>{
+			try{ bgMusic.pause(); }catch(e){}
+		});
+		page4Video.addEventListener('ended', ()=>{
+			try{ bgMusic.play(); }catch(e){}
+			showHeartForPage(2);
+		});
+		// show heart for page 2 when user engages (plays) the video
+		page4Video.addEventListener('play', ()=>{
+			showHeartForPage(2);
+		});
+	}
 
-// AUTH: Email/password authentication UI wiring
-function initAuthUI(){
-  // auth UI removed — login/signup removed from markup per request
-}
+	// Heart buttons advance single step only
+	document.addEventListener('click', (e)=>{
+		const hb = e.target.closest('.heart-btn');
+		if(!hb) return;
+		// prevent on final page
+		if(current === pages.length-1) return;
+		const parent = hb.closest('.page');
+		if(parent){
+			const idx = parseInt(parent.dataset.index,10);
+			// only allow advancing when the heart belongs to the active page
+			if(!isNaN(idx) && idx === current){
+				nextPage();
+			}
+		} 
+	});
 
+	// Page 5 fade in content when shown
+	const observer = new MutationObserver((mut)=>{
+		mut.forEach(m=>{
+			if(m.attributeName === 'aria-hidden'){
+				const target = m.target;
+				if(target.id === 'page5' && target.getAttribute('aria-hidden')==='false'){
+					// animate list items (timing is for animation only, not heart visibility)
+					target.querySelectorAll('.future-list li').forEach((li,i)=>{
+						li.style.opacity=0; li.style.transform='translateY(8px)';
+						setTimeout(()=>{ li.style.transition='opacity 400ms ease,transform 400ms'; li.style.opacity=1; li.style.transform='none'; }, 300 + i*180);
+					});
+					// heart for page index 3 should be visible immediately when this page is shown
+					showHeartForPage(3);
+				}
+			}
+		});
+	});
+	pages.forEach(p=>observer.observe(p,{attributes:true}));
 
-function confirmPrepay(){
-  // proceed without requiring sign-in
-  const location = document.getElementById('inputLocation').value || 'Unknown location';
-  const task = document.getElementById('inputTask').value;
-  const mins = Number(inputMinutes().value||0);
-  const purchase = Number(inputPurchase().value||0);
-  const prepaid = (mins * RATE_PER_MIN) + purchase;
-  // simple prepay check
-  if(mins < 5){ alert('Please enter at least 5 minutes'); return; }
-  currentBooking = {id:Date.now(),location,task,mins,purchase,prepaid,started:false};
-  // show matching screen and simulate waiter found
-  document.getElementById('waiterName').textContent = 'Finding...';
-  document.getElementById('waiterMeta').textContent = '';
-  showScreen('matching');
-  // start live timer immediately so user sees time tracked as soon as they confirm
-  try{ startLive(currentBooking); }catch(e){console.error('startLive failed',e)}
-  // Save booking locally (non-blocking)
-  try{
-    const bookingRecord = {
-      customerName: (document.getElementById('bookingCustomerName')?.value || 'Anonymous'),
-      Minutes: Number(mins),
-      purchase: Number(purchase),
-      prepaid: Number(prepaid),
-      TimeStamp: new Date().toISOString(),
-      serviceType: task,
-      location: location
-    };
-    saveLocalBooking(bookingRecord);
-    const msg = document.getElementById('bookingMsg');
-    if(msg){ msg.textContent = 'Booking saved.'; setTimeout(()=>msg.textContent = '',3000); }
-    renderLocalHistory();
-    if(typeof refreshProfileUI === 'function') refreshProfileUI();
-  }catch(err){ console.error('Failed to save booking locally:', err); }
-  setTimeout(()=>{
-    // fake waiter
-    const waiter = {name:'Chaltu',rating:4.8,jobs:142,img:'assets/waiterpfp.jpg'};
-    const img = document.querySelector('#matching .waiterCard img');
-    if(img) img.src = waiter.img;
-    document.getElementById('waiterName').textContent = waiter.name;
-    document.getElementById('waiterMeta').textContent = `${waiter.rating} • ${waiter.jobs} jobs`;
-    // if user was viewing matching, switch to live view now that waiter found
-    startLive(currentBooking);
-  },800);
-}
+	// Page 6 typing letter
+	const letterEl = document.getElementById('letter');
+	const letterText = "I love the way you make small things important. I love your courage, the warmth you bring, the way you make me feel seen. Today I celebrate you — every little and huge thing that is you."
+	function typeLetter(text, el, speed=28){
+		let i=0; el.textContent='';
+		const t = setInterval(()=>{
+			el.textContent += text[i]||''; i++;
+			if(i>text.length){
+				clearInterval(t);
+				// when typing finishes, deterministically show heart for page 4
+				showHeartForPage(4);
+			}
+		}, speed);
+	}
 
-function startLive(booking) {
-  if (booking.started) return; // prevent double start
+	// Start typing when page shown
+	const mo = new MutationObserver((mut)=>{
+		mut.forEach(m=>{
+			if(m.attributeName==='aria-hidden' && m.target.id==='page6' && m.target.getAttribute('aria-hidden')==='false'){
+				// lower bg music volume
+				if(bgMusic) bgMusic.volume = 0.3;
+				setTimeout(()=>typeLetter(letterText, letterEl, 26), 600);
+			}
+		});
+	});
+	const p6 = document.getElementById('page6'); if(p6) mo.observe(p6,{attributes:true});
 
-  booking.started = true;
-  booking.startTs = Date.now();
-  liveSeconds = 0;
+	// Initialize: no scroll
+	document.documentElement.style.overflow='hidden';
+	showPage(0);
 
-  showScreen('live');
-  function confirmBooking() {
-  const booking = {
-    location: selectedLocation,
-    task: selectedTask,
-    minutes: selectedMinutes,
-    purchase: totalPrice,
-    status: "booked",
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    proofUrl: ""
-  };
+	// keyboard accessibility: right/left
+	window.addEventListener('keydown', (e)=>{
+		if(e.key === 'ArrowRight' || e.key==='Enter') nextPage();
+		if(e.key === 'ArrowLeft') prevPage();
+	});
 
-  db.collection("bookings")
-    .add(booking)
-    .then(docRef => {
-      currentBookingId = docRef.id;
-      console.log("Booking saved:", currentBookingId);
-    })
-    .catch(err => {
-      console.error("Booking failed:", err);
-    });
-}
+	// ensure back button initial visibility
+	backBtn.style.display = 'none';
 
-
-  // UI
-  document.getElementById('liveWaiterName').textContent = 'Alex P.';
-  document.getElementById('liveWaiterStatus').textContent = 'Arriving';
-  document.getElementById('liveEarning').textContent =
-    `Rate: ${RATE_PER_MIN.toFixed(2)}ETB/min`;
-
-  // TIMER (authoritative)
- liveTimerId = setInterval(() => {
-  liveSeconds++;
-  document.getElementById('liveTimer').textContent =
-    formatTime(liveSeconds);
-  updateLiveCost();
-  persistLiveState();
-  if (liveSeconds === 10)
-    document.getElementById('liveWaiterStatus').textContent = 'Waiting';
-  if (liveSeconds === 30)
-    document.getElementById('liveWaiterStatus').textContent = 'Completing';
-}, 1000);
-
-
-  // GEOLOCATION
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        updateWaiterMarker(pos.coords.latitude, pos.coords.longitude);
-      },
-      err => console.error('Geolocation error:', err),
-      { enableHighAccuracy: true }
-    );
-  }
-
-  // Fix map resize
-  setTimeout(() => map?.invalidateSize(), 300);
-}
-function updateLiveCost(){
-  const minutes = liveSeconds / 60;
-  const cost =
-    (minutes * RATE_PER_MIN) +
-    (currentBooking?.purchase || 0);
-
-  document.getElementById('liveCost').textContent =
-    `${cost.toFixed(2)}ETB`;
-}
-function endBooking() {
-  // Try to find a proof file input in several places (robust to id mismatches)
-  let proofFile = null;
-  const proofEl = document.getElementById('proofInput') || document.getElementById('proofInputDashboard') || document.querySelector('#proofSection input[type="file"]');
-  if (proofEl && proofEl.files && proofEl.files.length > 0) proofFile = proofEl.files[0];
-
-  if (!selectedPaymentMethod) {
-    alert('Select a payment method first.');
-    return;
-  }
-
-  if (!proofFile) {
-    alert('Upload proof first.');
-    return;
-  }
-
-  // Optional: stop live timer (only if relevant)
-  if (liveTimerId) clearInterval(liveTimerId);
-
-  // Calculate final cost
-  const totalMinutes = Math.max(1, Math.ceil(liveSeconds / 60));
-  const finalCost =
-    (totalMinutes * RATE_PER_MIN) +
-    (currentBooking?.purchase || 0);
-
-  document.getElementById('finalSummary').textContent =
-    `Paid via ${selectedPaymentMethod} — ${finalCost.toFixed(2)}ETB — ${totalMinutes} minute(s)`;
-
-  // Clean up payment UI
-  selectedPaymentMethod = null;
-  const paymentDiv = document.getElementById('paymentOptions');
-  if (paymentDiv) paymentDiv.style.display = 'none';
-  const proofSection = document.getElementById('proofSection');
-  if (proofSection) proofSection.style.display = 'none';
-  const proofInputEl = document.getElementById('proofInput') || document.querySelector('#proofSection input[type="file"]');
-  if (proofInputEl) proofInputEl.value = '';
-
-  // Go to completion screen
-  showScreen('complete');
-}
-function showPaymentOptions() {
-  const paymentDiv = document.getElementById('paymentOptions');
-  const activeBooking = document.getElementById('activeBookingMock');
-  if (!paymentDiv) return;
-
-  // Ensure the active booking card is visible so its children can be shown
-  if (activeBooking) activeBooking.style.display = 'block';
-
-  const active = document.querySelector('.screen.active');
-  if (active && active.id !== 'dashboard') {
-    showScreen('dashboard');
-    // allow the screen transition to complete before showing the panel
-    setTimeout(() => { paymentDiv.style.display = 'block'; }, 140);
-  } else {
-    paymentDiv.style.display = 'block';
-  }
-}
-function selectPayment(method) {
-  selectedPaymentMethod = method;
-  document.getElementById('proofSection').style.display = 'block';
-}
-
-
-function addToHistory(entry){
-  const list = document.getElementById('historyList');
-  const li = document.createElement('li');
-  li.textContent = `${entry.task} — ${entry.cost.toFixed(2)}ETB — ${entry.minutes}m`;
-  list.prepend(li);
-}
-
-function formatTime(s){
-  const mm = String(Math.floor(s/60)).padStart(2,'0');
-  const ss = String(s%60).padStart(2,'0');
-  return `${mm}:${ss}`;
-}
-
-function handleProof(e){
-  const file = e.target.files[0];
-  if(!file) return;
-  // show a tiny thumbnail somewhere — for now, alert name
-  alert('Proof uploaded: '+file.name);
-}
-
-function setRating(n){
-  alert('Rating: '+n+' stars — thanks!');
-}
-
-function submitRating(){
-  const tip = Number(document.getElementById('tipInput').value||0);
-  alert('Thanks — tip: '+tip.toFixed(2)+'ETB');
-  showScreen('dashboard');
-}
-
-function saveProfile(){
-  alert('Profile saved');
-  showScreen('dashboard');
-}
-function completeBooking(file) {
-  const storageRef = storage.ref();
-  const proofRef = storageRef.child(`proofs/${currentBookingId}.jpg`);
-
-  proofRef.put(file)
-    .then(snapshot => snapshot.ref.getDownloadURL())
-    .then(url => {
-      return db.collection("bookings")
-        .doc(currentBookingId)
-        .update({
-          status: "completed",
-          proofUrl: url
-        });
-    })
-    .then(() => {
-      console.log("Booking completed");
-    })
-    .catch(err => {
-      console.error("Completion failed:", err);
-    });
-}
-
-// Initialize map with a fallback
-let map = null;
-let waiterMarker = null;
-let mapInitialized = false;
-
-function initLiveMap(lat, lng) {
-  if (mapInitialized) return;
-
-  map = L.map('mapPlaceholder').setView([lat, lng], 16);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '© OpenStreetMap'
-  }).addTo(map);
-
-  waiterMarker = L.marker([lat, lng]).addTo(map);
-
-  mapInitialized = true;
-
-  // Fix partial loading when screen becomes visible
-  setTimeout(() => {
-    map.invalidateSize();
-  }, 300);
-}
-
-function updateWaiterMarker(lat, lng) {
-  if (!mapInitialized) {
-    initLiveMap(lat, lng);
-    return;
-  }
-
-  waiterMarker.setLatLng([lat, lng]);
-  map.panTo([lat, lng]);
-}
-
-function persistLiveState() {
-  localStorage.setItem('wa_live_state', JSON.stringify({
-    booking: currentBooking,
-    liveSeconds,
-    isLive: true
-  }));
-}
-
-
-// Expose commonly-used functions to the global scope so inline handlers work reliably
-window.showScreen = showScreen;
-window.confirmPrepay = confirmPrepay;
-window.endBooking = endBooking;
-window.submitRating = submitRating;
-window.saveProfile = saveProfile;
-window.setRating = setRating;
-window.toggleTheme = toggleTheme;
-window.toggleMenu = toggleMenu;
-
-console.log("JavaScript is working");
-// Booking interceptor removed — saving now handled inside confirmPrepay().
-// Firebase-dependent subscriptions and auth listeners removed.
-
-// Profile UI helpers
-function initialsFromName(name){
-  if(!name) return 'U';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if(parts.length===1) return parts[0].slice(0,2).toUpperCase();
-  return (parts[0][0] + (parts[1][0]||'')).toUpperCase();
-}
-
-function refreshProfileUI(){
-  const avatar = document.getElementById('profileAvatar');
-  const name = document.getElementById('profileName')?.value || '';
-  if(avatar) avatar.textContent = initialsFromName(name) || 'U';
-  const bookings = loadLocalBookings();
-  const countEl = document.getElementById('bookingCount');
-  if(countEl) countEl.textContent = String(bookings.length || 0);
-  const recent = document.getElementById('profileRecent');
-  if(recent){
-    recent.innerHTML = '';
-    const slice = bookings.slice(0,5);
-    if(slice.length===0){ recent.innerHTML = '<li>No recent bookings.</li>'; }
-    slice.forEach(b=>{ const li = document.createElement('li'); li.textContent = `${b.serviceType || 'Wait'} — ${b.Minutes||0}m — ${b.customerName||''}`; recent.appendChild(li); });
-  }
-  // update avatar live when editing name
-  const nameInput = document.getElementById('profileName');
-  if(nameInput && !nameInput._profileBound){
-    nameInput.addEventListener('input', ()=>{ if(avatar) avatar.textContent = initialsFromName(nameInput.value); });
-    nameInput._profileBound = true;
-  }
-}
-
-
+})();
+document.addEventListener('DOMContentLoaded', () => {
+  showPage(0);
+});
